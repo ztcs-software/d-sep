@@ -1,0 +1,39 @@
+[package]
+name = "d-sep"
+version = "1.0.0-beta-1"
+description = "Separate DJI D-Log, D-Log 2 and D-Log M recordings"
+authors = ["ZTCS Software"]
+license = "MIT"
+repository = "https://github.com/ztcs-software/d-sep"
+edition = "2024"
+# 1.88 for the fixed `time` (RUSTSEC-2026-0009) and `plist`/`quick-xml` (RUSTSEC-2026-0194/0195).
+rust-version = "1.88"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+# The dialog plugin's own rfd, used directly for the "Stop and quit?" question (see ask_to_stop).
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
+] }
+
+[dev-dependencies]
+# Pins the JSON shapes the UI's hand-written types in src/lib/api.ts rely on.
+serde_json = "1"
+
+# https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

@@ -1,0 +1,176 @@
+name: Release
+
+# Cuts a release when main contains a version bump paired with a matching release-notes file. On push to main,
+# the prepare job reads `version` from package.json. If `releases/<version>.md` exists AND neither a v<version>
+# tag nor a release for it exists yet, it builds the Windows installer and the portable .exe into a draft
+# release. Otherwise it silently no-ops — normal feature merges don't trigger anything.
+#
+# The notes file content becomes the GitHub release body. D-Sep has no in-app updater: people download new
+# versions from the release page, so there is no latest.json and no update signing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # allow manual re-run if a build flaked
+
+# Both jobs need write: `build` creates the draft and uploads to it, and `prepare` looks for a draft that's already
+# waiting, which GitHub lists only to a token that can write releases. With read only, the gate wouldn't see the
+# draft and would build into it again.
+permissions:
+  contents: write
+
+# One release run at a time. The gate below decides whether to ship by checking that no `v$PKG` tag or release
+# exists yet — a read that happens before any run creates one. Two pushes landing on main close together would
+# therefore both read "not there", both answer `should_release=true`, and race two builds into the same draft.
+#
+# `cancel-in-progress: false` on purpose — never kill a release mid-build. The queued run starts only after the
+# first finishes, by which point the draft exists and its own gate soft-skips, which is exactly the desired
+# outcome.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    # Releases only ever come from main. The push trigger already guarantees that, but `workflow_dispatch` lets
+    # you pick any ref — and the documented flow stages the version bump + notes file on a dev branch BEFORE
+    # merge, which is exactly the state the gate below says "ship it" to. Without this guard a stray manual run
+    # on that branch would draft a release of unmerged code.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.gate.outputs.version }}
+      should_release: ${{ steps.gate.outputs.should_release }}
+      release_body: ${{ steps.notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # need full history to inspect existing tags
+
+      - id: gate
+        name: Decide whether to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          LOCK=$(node -p "require('./package-lock.json').version")
+          TAURI=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(grep -m1 '^version' src-tauri/Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+
+          # Hard fail on version drift — that's a release-blocker bug, not a "not a release" signal. The files
+          # must agree before we ship. (tests/versions.test.ts catches this earlier, at `npm test` time.)
+          if [ "$PKG" != "$LOCK" ] || [ "$PKG" != "$TAURI" ] || [ "$PKG" != "$CARGO" ]; then
+            echo "::error::Version mismatch — package.json=$PKG, package-lock.json=$LOCK, tauri.conf.json=$TAURI, Cargo.toml=$CARGO"
+            exit 1
+          fi
+
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+
+          # Soft skip when there's no notes file: the absence is the signal that this merge wasn't intended as a
+          # release.
+          if [ ! -f "releases/$PKG.md" ]; then
+            echo "::notice::releases/$PKG.md not found — skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Soft skip when the version already shipped — keeps re-runs idempotent.
+          if git rev-parse -q --verify "refs/tags/v$PKG" >/dev/null; then
+            echo "::notice::Tag v$PKG already exists — skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The tag check alone misses a draft that's still waiting for review: GitHub creates a draft's tag only
+          # when it's published, and tauri-action never creates one. Without this, a second merge before
+          # publishing would rebuild into the same draft, while the draft's tag still targets the first merge's
+          # commit. `gh release view` finds drafts too; any error other than "not found" stops the run rather
+          # than guessing.
+          if STATE=$(gh release view "v$PKG" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>&1); then
+            echo "::notice::A $STATE release for v$PKG already exists — skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [[ "$STATE" != *"release not found"* ]]; then
+            echo "::error::Couldn't check for an existing v$PKG release: $STATE"
+            exit 1
+          fi
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+      - id: notes
+        if: steps.gate.outputs.should_release == 'true'
+        name: Read release notes
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.gate.outputs.version }}"
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            # printf %s\n guarantees a trailing newline even if the notes file doesn't end with one — otherwise
+            # the closing delimiter lands on the same line as the last content line and the parser can't see it.
+            printf '%s\n' "$(cat "releases/$VERSION.md")"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # Pin to a specific stable release rather than tracking `@stable`: a surprise rustc release between
+      # merges could otherwise break a release build with no source change. Same pin as ci.yml and
+      # `rust-version` in Cargo.toml (tests/toolchain.test.ts keeps the three in step). Bump them together.
+      # Third-party actions are pinned by commit, as they run with a token that can write releases; the
+      # comment says which release it is.
+      - uses: dtolnay/rust-toolchain@9c73e2f62269c4b1d0240bd5dd1b81de08099bb6 # 1.88.0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # The portable .exe, built exactly like `npm run exe`. It comes first and from its own --no-bundle build
+      # because tauri-action only supports uploading the plain binary from one: bundling stamps the binary with
+      # its bundle type, so the portable copy would claim to be the installer. The name is spelled out rather
+      # than using [arch] so it lines up with the installer's `_x64-setup.exe`. The first step to run creates
+      # the draft release (tauri-action doesn't create the tag; GitHub does that on publish).
+      - name: Build and upload the portable .exe
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ needs.prepare.outputs.version }}
+          releaseName: 'D-Sep v${{ needs.prepare.outputs.version }}'
+          releaseBody: ${{ needs.prepare.outputs.release_body }}
+          releaseDraft: true
+          # Anything with a pre-release qualifier (e.g. `-beta-1`, `-rc-1`) is flagged prerelease; bare `1.2.3`
+          # ships as stable.
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          uploadUpdaterJson: false
+          uploadPlainBinary: true
+          releaseAssetNamePattern: '[name]_[version]_x64-portable[ext]'
+          args: --no-bundle
+
+      # The NSIS installer, uploaded to the same draft (found by its tag). Cargo reuses the dependencies the step
+      # above compiled. The installer keeps the name Tauri's bundler gives it: D-Sep_<version>_x64-setup.exe.
+      - name: Build and upload the installer
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ needs.prepare.outputs.version }}
+          releaseName: 'D-Sep v${{ needs.prepare.outputs.version }}'
+          releaseBody: ${{ needs.prepare.outputs.release_body }}
+          releaseDraft: true
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
+          uploadUpdaterJson: false
+          args: --bundles nsis

@@ -1,0 +1,73 @@
+name: CI
+
+# Runs the checks the release checklist expects to be green: svelte-check, the Vite build, the Vitest suite
+# (which includes the release version-agreement gate in tests/versions.test.ts and the Rust ↔ TypeScript IPC
+# agreement in tests/ipc.test.ts), and the Rust tests. Releases are handled by release.yml; this workflow never
+# publishes anything.
+#
+# Triggers on pushes to main so each merge commit gets its own verdict, and on PRs to main so the merge gate
+# sees a check before merge. Dev branches get CI once they open a PR. NOTE: this workflow does NOT gate
+# release.yml — both fire on the same push-to-main event and run in parallel, and release.yml drafts its
+# release without waiting for CI (the draft still needs a manual publish, which is the human backstop: check
+# this run is green before publishing). The actual merge gate is branch protection: mark this file's two job
+# names ("svelte-check + vite build + vitest", "cargo test (windows)") as required status checks on `main`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# One in-flight run per event+ref: a new push to a PR branch obsoletes the previous run, so cancel it. On main
+# itself, never cancel — a superseded main run that gets cancelled would leave that (possibly released) merge
+# commit with no completed CI verdict.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ui:
+    name: svelte-check + vite build + vitest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npm test
+
+  rust:
+    name: cargo test (windows)
+    # Windows, not Linux: D-Sep only ships for Windows, and its file transfers (CopyFileExW / MoveFileExW, with
+    # progress, cancel and partial-copy cleanup) sit behind #[cfg(windows)], as does the cancel-mid-copy test.
+    # On Linux the tests would exercise the plain std::fs fallback instead.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Pinned to the same toolchain as release.yml, and to `rust-version` in Cargo.toml, so CI proves the
+      # declared minimum and a surprise rustc release can't make CI and the release build disagree.
+      # tests/toolchain.test.ts fails when the three drift apart. Bump them together. Third-party actions are
+      # pinned by commit, so a moved tag can't change what runs; the comment says which release it is.
+      - uses: dtolnay/rust-toolchain@9c73e2f62269c4b1d0240bd5dd1b81de08099bb6 # 1.88.0
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+
+      # --locked: a Cargo.lock that drifted from Cargo.toml is a release blocker (release.yml builds from the
+      # lockfile) — fail here instead. No frontend build needed: test builds use devUrl, not ../dist.
+      - run: cargo test --locked
+        working-directory: src-tauri
+
+      - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: src-tauri
