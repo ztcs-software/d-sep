@@ -10,6 +10,8 @@ A tiny Windows app: pick a folder, press Sort, done.
 [![Latest release](https://img.shields.io/github/v/release/ztcs-software/d-sep?include_prereleases&label=release)](https://github.com/ztcs-software/d-sep/releases)
 ![Windows 10 / 11](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6)
 
+<img src="docs/demo.gif" width="600" alt="A folder of DJI clips dropped on D-Sep, which copies its D-Log, D-Log 2 and D-Log M clips into folders and prefixes their names" />
+
 </div>
 
 ---
