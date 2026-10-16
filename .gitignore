@@ -1,0 +1,58 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.sw?
+
+# Node
+node_modules
+dist
+*.local
+
+# Tauri / Rust
+src-tauri/target/
+# Capability schemas Tauri generates for editor autocompletion
+src-tauri/gen/
+# src-tauri/.cargo/ stays tracked: its config.toml links the VC++ runtime into the .exe.
+
+# Build outputs
+*.exe
+*.msi
+
+# DJI footage and sidecars: test clips live outside the repo (see D_SEP_SAMPLES)
+*.mp4
+*.mov
+*.lrf
+*.srt
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Secrets & env
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+
+# TypeScript incremental cache
+*.tsbuildinfo
+
+# Coverage / test output
+coverage/
+
+# OS junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

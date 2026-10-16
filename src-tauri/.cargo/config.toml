@@ -1,0 +1,4 @@
+[env]
+# Link the Visual C++ runtime into the .exe so it runs on PCs without the
+# VC++ redistributable. Read by tauri-build.
+STATIC_VCRUNTIME = "true"

@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window gets only what the UI calls: the app version, drag-and-drop events, the theme, showing the window once it's on, and the folder picker",
+  "windows": ["main"],
+  "permissions": [
+    "core:app:allow-version",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-set-theme",
+    "core:window:allow-show",
+    "dialog:allow-open"
+  ]
+}

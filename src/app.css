@@ -1,0 +1,119 @@
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceef2;
+  --surface-hover: #f7f8fa;
+  --border: #e2e5ea;
+  --border-strong: #cdd2da;
+  /* What marks a control: text fields, radio rings, the drop area. */
+  --input-border: #878f9c;
+  --text: #15171c;
+  --muted: #4b5260;
+  --faint: #646b78;
+  --primary: #15171c;
+  --primary-text: #ffffff;
+  --segment-on: #ffffff;
+
+  --dlog: #1d5bd8;
+  --dlog-bg: #e6eeff;
+  --dlog2: #b84d0d;
+  --dlog2-bg: #ffeee2;
+  --dlogm: #b0268f;
+  --dlogm-bg: #fce8f6;
+  --ok: #16874a;
+  --ok-bg: #e3f5ea;
+  --warn: #b45309;
+  --warn-bg: #fdf0dc;
+  --danger: #c03434;
+
+  --cta-from: #2563eb;
+  --cta-via: #7c3aed;
+  --cta-to: #b0268f;
+  --cta-glow: rgba(124, 58, 237, 0.35);
+
+  color-scheme: light;
+}
+
+/*
+ * Contrast on --surface, light / dark: text 18:1 / 15:1, muted 7.9:1 / 9:1, faint 5.4:1 / 6:1 (4.6:1 / 4.8:1 on
+ * --surface-2), the profile colors at least 4.5:1 on their badges, and --input-border 3.3:1 / 3.8:1. All of it
+ * meets WCAG AA: 4.5:1 for text, 3:1 for what marks a control.
+ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0b0e;
+    --surface: #1b1e25;
+    --surface-2: #2b3039;
+    --surface-hover: #23272f;
+    --border: #323741;
+    --border-strong: #4c535f;
+    --input-border: #717986;
+    --text: #f3f5f8;
+    --muted: #b8bec9;
+    --faint: #959ca9;
+    --primary: #f3f5f8;
+    --primary-text: #111317;
+    --segment-on: #515967;
+
+    --dlog: #82b0ff;
+    --dlog-bg: rgba(77, 141, 255, 0.2);
+    --dlog2: #ffa66b;
+    --dlog2-bg: rgba(255, 138, 61, 0.2);
+    --dlogm: #f58ddb;
+    --dlogm-bg: rgba(242, 127, 212, 0.2);
+    --ok: #5ad896;
+    --ok-bg: rgba(74, 209, 138, 0.16);
+    --warn: #f7b95e;
+    --warn-bg: rgba(245, 176, 76, 0.16);
+    --danger: #ff8a8a;
+
+    --cta-from: #3b6ff5;
+    --cta-via: #8048f0;
+    --cta-to: #c0339f;
+    --cta-glow: rgba(140, 90, 255, 0.45);
+
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13.5px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--dlog);
+  outline-offset: 2px;
+}
