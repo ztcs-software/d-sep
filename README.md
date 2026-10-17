@@ -2,9 +2,9 @@
 
 # D-Sep
 
-**Separate DJI D-Log, D-Log 2 and D-Log M clips from the rest of your footage**
+**Easily separate clips recorded in DJI D-Log, D-Log 2 and D-Log M profiles from the rest of your footage**
 
-A tiny Windows app: pick a folder, press Sort, done.
+Pick a folder, press Sort, done.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/ztcs-software/d-sep?include_prereleases&label=release)](https://github.com/ztcs-software/d-sep/releases)
@@ -18,7 +18,7 @@ A tiny Windows app: pick a folder, press Sort, done.
 
 ## 🔭 What it does
 
-DJI cameras label every clip as Rec.709, even when it was shot in log, so Explorer and most editors
+Some DJI devices, including DJI Osmo Pocket 4P, label every clip as Rec.709, even when it was shot in a log profile, so Explorer and most video editors
 can't tell D-Log footage from normal footage. D-Sep reads the profile the camera really used and
 separates the log clips: into `D-Log`, `D-Log 2` and `D-Log M` folders, by adding a prefix to their
 names (`DL_`, `DL2_`, `DLM_`, or your own), or both.
