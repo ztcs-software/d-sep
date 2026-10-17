@@ -1,7 +1,7 @@
 {
   "name": "d-sep",
   "private": true,
-  "version": "1.0.0-beta-1",
+  "version": "1.0.0",
   "description": "Separate DJI D-Log, D-Log 2 and D-Log M recordings",
   "license": "MIT",
   "type": "module",

@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { dropNotice, extension, formatBytes, formatDuration, joinPath, plural, sameFolder, splitPath } from "./format";
+import {
+  dropNotice,
+  extension,
+  formatBytes,
+  formatDuration,
+  joinPath,
+  plural,
+  relativeTo,
+  sameFolder,
+  splitPath,
+} from "./format";
 
 describe("formatBytes", () => {
   it("shows whole bytes below 1 KB", () => {
@@ -79,6 +89,21 @@ describe("sameFolder", () => {
     expect(sameFolder("C:\\Footage\\", "c:\\footage")).toBe(true);
     expect(sameFolder("E:\\", "E:")).toBe(true);
     expect(sameFolder("C:\\Footage", "C:\\Footage 2")).toBe(false);
+  });
+});
+
+describe("relativeTo", () => {
+  it("is the part of a path under a folder, ignoring case and trailing separators", () => {
+    expect(relativeTo("C:\\Footage\\Out\\D-Log", "c:\\footage")).toBe("Out\\D-Log");
+    expect(relativeTo("E:\\Out", "E:\\")).toBe("Out");
+    expect(relativeTo("C:\\Footage\\", "C:\\Footage")).toBe("");
+  });
+
+  // A destination inside the scanned folder holds an earlier sort's clips, which keep their place under it.
+  it("is null for a path outside the folder, even one whose name starts the same", () => {
+    expect(relativeTo("C:\\Footage 2\\Out", "C:\\Footage")).toBeNull();
+    expect(relativeTo("C:\\Footage", "C:\\Footage\\Out")).toBeNull();
+    expect(relativeTo("D:\\Footage", "C:\\Footage")).toBeNull();
   });
 });
 
