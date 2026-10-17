@@ -52,6 +52,14 @@ export function sameFolder(a: string, b: string): boolean {
   return plain(a) === plain(b);
 }
 
+/** The part of `path` under `folder`, ignoring case as Windows does: "" for the folder itself, null for elsewhere. */
+export function relativeTo(path: string, folder: string): string | null {
+  const [inner, outer] = [path, folder].map((p) => p.replace(/[\\/]+$/, ""));
+  if (inner.toLowerCase() === outer.toLowerCase()) return "";
+  const under = inner.toLowerCase().startsWith(outer.toLowerCase()) && /[\\/]/.test(inner[outer.length]);
+  return under ? inner.slice(outer.length + 1) : null;
+}
+
 /**
  * What to say once a drop has been scanned into `root`: a dropped file shows all of its folder, and of several
  * folders only the first is scanned. "" for a single folder.

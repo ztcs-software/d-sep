@@ -141,7 +141,8 @@ jobs:
       # The portable .exe, built exactly like `npm run exe`. It comes first and from its own --no-bundle build
       # because tauri-action only supports uploading the plain binary from one: bundling stamps the binary with
       # its bundle type, so the portable copy would claim to be the installer. The name is spelled out rather
-      # than using [arch] so it lines up with the installer's `_x64-setup.exe`. The first step to run creates
+      # than using [arch] so it lines up with the installer's `_x64-setup.exe`. It starts with [mainBinaryName],
+      # not [name], which tauri-action sets to "binary" for the plain binary. The first step to run creates
       # the draft release (tauri-action doesn't create the tag; GitHub does that on publish).
       - name: Build and upload the portable .exe
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
@@ -157,7 +158,7 @@ jobs:
           prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
           uploadUpdaterJson: false
           uploadPlainBinary: true
-          releaseAssetNamePattern: '[name]_[version]_x64-portable[ext]'
+          releaseAssetNamePattern: '[mainBinaryName]_[version]_x64-portable[ext]'
           args: --no-bundle
 
       # The NSIS installer, uploaded to the same draft (found by its tag). Cargo reuses the dependencies the step

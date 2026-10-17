@@ -31,6 +31,7 @@
     formatDuration,
     joinPath,
     plural,
+    relativeTo,
     sameFolder,
     splitPath,
   } from "./lib/format";
@@ -162,12 +163,11 @@
   const sidecarKinds = $derived(
     [...new Set(logClips.flatMap((c) => c.sidecars.map((s) => extension(s.path))))].sort().join(", "),
   );
-  const totalBytes = $derived(bytes(logClips, sidecars));
   /** The log clips a sort would work on: those not already in place. */
   const toSort = $derived(logClips.filter((c) => !placedAlready.has(c.path)));
   const sortBytes = $derived(bytes(toSort, sidecars));
-  // Position of each log clip in the sort queue, which follows list order.
-  const queue = $derived(new Map(logClips.map((c, i) => [c.path, i])));
+  // Position of each log clip, by name, in the sort queue, which follows list order.
+  const queue = $derived(new Map(logClips.map((c, i) => [c.name, i])));
   /** The folder on show: the one being scanned, or the last one scanned. */
   const folder = $derived(splitPath(scanning ? scanning.path : root));
   const busy = $derived(phase === "scanning" || phase === "sorting" || phase === "undoing");
@@ -238,7 +238,8 @@
   const doing = $derived(progress?.verifying ? "Verifying" : VERBS[workVerb].doing);
   // Read out once per file, and again when its copy is being verified; the bytes change too often to announce.
   const announcement = $derived(working && progress && progress.index ? `${doing} ${progress.index} of ${progress.count}` : "");
-  const activeIndex = $derived(phase === "sorting" && progress ? progress.index : 0);
+  /** The queue position of the clip being sorted, or -1. Found by name, as the sort skips clips already in place. */
+  const activeAt = $derived(phase === "sorting" && progress?.file ? (queue.get(progress.file) ?? -1) : -1);
 
   $effect(() => {
     saveOptions({ mode, action, recursive, sidecars, prefixes, theme, layout, verify });
@@ -264,6 +265,8 @@
   // after the options that decide where clips go stop changing.
   $effect(() => {
     const request = ++placedRequest;
+    // Kept while sorting, which skips those clips: the list still shows why it counts fewer.
+    if (phase === "sorting") return;
     if (phase !== "ready" || prefixProblem) {
       placedAlready = new Set();
       return;
@@ -291,7 +294,7 @@
 
   // Keep the clip being sorted in view.
   $effect(() => {
-    if (!activeIndex) return;
+    if (activeAt < 0) return;
     tick().then(() => list?.querySelector(".row.active")?.scrollIntoView({ block: "nearest" }));
   });
 
@@ -381,7 +384,9 @@
   /** The folder a log clip goes to. Mirrors Job::new in sort.rs. */
   function targetDir(clip: Clip, kind: LogKind): string {
     const base = destination ?? root;
-    const sub = splitPath(clip.name).parent;
+    // A clip already inside a destination that's inside the scanned folder keeps its place there.
+    const inside = relativeTo(base, root) === null ? null : relativeTo(splitPath(clip.path).parent, base);
+    const sub = inside ?? splitPath(clip.name).parent;
     const own = sub ? joinPath(base, sub) : base;
     if (action === "rename") return own;
     return outputDir(layout === "each" ? own : base, FOLDERS[kind]);
@@ -491,7 +496,7 @@
     const options = { mode, action, sidecars, prefixes: { ...prefixes }, destination, layout, verify: verify && copies };
     sorted = { mode, action, destination, verify: options.verify };
     const focused = document.activeElement;
-    beginWork(logClips.length, totalBytes * (options.verify ? 2 : 1));
+    beginWork(toSort.length, sortBytes * (options.verify ? 2 : 1));
     phase = "sorting";
     try {
       summary = await sortClips(options, id, track);
@@ -650,12 +655,12 @@
     }
   }
 
-  // Reads activeIndex rather than progress, so rows update once per file, not with every progress update.
+  // Reads activeAt rather than progress, so rows update once per file, not with every progress update.
   function rowState(clip: Clip): string {
-    const at = queue.get(clip.path);
-    if (!activeIndex || at === undefined) return "";
-    if (at < activeIndex - 1) return "done";
-    return at === activeIndex - 1 ? "active" : "";
+    const at = queue.get(clip.name);
+    if (activeAt < 0 || at === undefined) return "";
+    if (at < activeAt) return "done";
+    return at === activeAt ? "active" : "";
   }
 
   function badge(clip: Clip): { text: string; tone: string; title: string } {

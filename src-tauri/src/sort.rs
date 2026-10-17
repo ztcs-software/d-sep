@@ -207,8 +207,11 @@ impl<'a> Job<'a> {
             Profile::Other(_) | Profile::Unknown => return None,
         };
         let base = options.destination.as_deref().unwrap_or(root);
-        // The clip's own folder, as it is under `base`.
-        let sub = clip.path.parent()?.strip_prefix(root).ok()?;
+        // The clip's own folder, as it is under `base`. A clip already inside a destination that's inside the scanned
+        // folder is where an earlier sort put it: it keeps its place there, rather than going into another copy of it.
+        let parent = clip.path.parent()?;
+        let from = if base.starts_with(root) && parent.starts_with(base) { base } else { root };
+        let sub = parent.strip_prefix(from).ok()?;
         let own = if sub.as_os_str().is_empty() { base.to_path_buf() } else { base.join(sub) };
         let dir = match (options.action, options.layout) {
             (Action::Rename, _) => own,
@@ -242,6 +245,8 @@ pub fn run(
     // Verifying reads every copy back, as much work again as copying it.
     let passes = if options.verify { 2 } else { 1 };
     let jobs: Vec<Job> = clips.iter().filter_map(|clip| Job::new(root, clip, options)).collect();
+    // Clips already in place are left alone, so the progress counts only the others, as the UI's button does.
+    let (already, jobs): (Vec<Job>, Vec<Job>) = jobs.into_iter().partition(|job| is_placed(job, with_sidecars));
     let mut progress = Progress {
         index: 0,
         count: jobs.len(),
@@ -250,10 +255,13 @@ pub fn run(
         bytes_total: jobs.iter().map(|job| job_bytes(job.clip, with_sidecars) * passes).sum(),
         verifying: false,
     };
-    let mut summary = Summary::default();
+    let mut summary = Summary { existing: already.len(), ..Summary::default() };
     let mut journal = Journal { verify: options.verify, ..Journal::default() };
     // Per profile: None before its first clip, then Some(its folder), or Some(None) once there's a second.
     let mut folders: [Option<Option<&Path>>; 3] = [None; 3];
+    for job in &already {
+        note_folder(&mut folders, job);
+    }
 
     for job in &jobs {
         let clip = job.clip;
@@ -276,16 +284,7 @@ pub fn run(
         };
         let placed = place(job, sidecars, options, passes, cancel, &mut summary, &mut journal, &mut on_bytes);
         if placed.is_ok() {
-            let slot = &mut folders[match clip.profile {
-                Profile::DLog => 0,
-                Profile::DLog2 => 1,
-                _ => 2,
-            }];
-            *slot = match *slot {
-                None => Some(Some(&job.dir)),
-                Some(Some(seen)) if seen != job.dir => Some(None),
-                same => same,
-            };
+            note_folder(&mut folders, job);
         }
         match placed {
             Ok(true) => match clip.profile {
@@ -319,6 +318,20 @@ pub fn run(
     summary.folder = options.destination.clone().unwrap_or_else(|| root.to_path_buf());
     summary.undoable = !journal.moved.is_empty();
     Outcome { summary, journal }
+}
+
+/// Notes the folder a job's clip is in now, in its profile's slot of `run`'s `folders`.
+fn note_folder<'a>(folders: &mut [Option<Option<&'a Path>>; 3], job: &'a Job) {
+    let slot = &mut folders[match job.clip.profile {
+        Profile::DLog => 0,
+        Profile::DLog2 => 1,
+        _ => 2,
+    }];
+    *slot = match *slot {
+        None => Some(Some(&job.dir)),
+        Some(Some(seen)) if seen != job.dir => Some(None),
+        same => same,
+    };
 }
 
 fn sidecars_of(clip: &Clip, include: bool) -> &[Sidecar] {
@@ -391,17 +404,20 @@ fn place(
 /// The clips a run with `options` would leave as they are: already where it would put them, with the sidecars it
 /// would bring. The same checks as `place`, without touching anything.
 pub fn in_place(root: &Path, clips: &[Clip], options: &Options) -> Vec<PathBuf> {
-    let placed = |job: &Job| {
-        let Job { clip, ref dir, prefix } = *job;
-        if prefix.is_empty() && clip.path.parent() == Some(dir.as_path()) {
-            return true;
-        }
-        let sidecars = sidecars_of(clip, options.sidecars);
-        let (stem, there) = stem_in(clip, dir, prefix, sidecars);
-        let original = clip.path.file_stem().unwrap_or_default();
-        there && sidecars.iter().all(|sidecar| dir.join(target_name(&sidecar.path, prefix, &stem, original)).exists())
-    };
+    let placed = |job: &Job| is_placed(job, options.sidecars);
     clips.iter().filter_map(|clip| Job::new(root, clip, options)).filter(placed).map(|job| job.clip.path.clone()).collect()
+}
+
+/// Whether the job's clip is already where it would go, with the sidecars it would bring.
+fn is_placed(job: &Job, with_sidecars: bool) -> bool {
+    let Job { clip, ref dir, prefix } = *job;
+    if prefix.is_empty() && clip.path.parent() == Some(dir.as_path()) {
+        return true;
+    }
+    let sidecars = sidecars_of(clip, with_sidecars);
+    let (stem, there) = stem_in(clip, dir, prefix, sidecars);
+    let original = clip.path.file_stem().unwrap_or_default();
+    there && sidecars.iter().all(|sidecar| dir.join(target_name(&sidecar.path, prefix, &stem, original)).exists())
 }
 
 /// Makes `dir` and any missing parents, noting each one it made.
@@ -1211,6 +1227,28 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn progress_leaves_out_clips_already_in_place() {
+        let root = footage("progressplaced");
+        let clips = scan(&root, false).unwrap();
+        let options = options(Mode::Copy, Action::Folders, true);
+        // A is copied already, as when a sort was cancelled after it.
+        run(&root, &clips[..1], &options, &AtomicBool::new(false), |_| {});
+        let mut first = None;
+        let summary = run(&root, &clips, &options, &AtomicBool::new(false), |p| {
+            first.get_or_insert_with(|| p.clone());
+        })
+        .summary;
+        // B, its sidecar and C: the work left, as the UI's button counts it.
+        let first = first.unwrap();
+        let left = clips[1].size + clips[1].sidecars[0].size + clips[2].size;
+        assert_eq!((first.index, first.count, first.file.as_str(), first.bytes_total), (1, 2, "B.MP4", left));
+        assert_eq!((summary.dlog2, summary.dlogm, summary.existing), (1, 1, 1));
+        // A still counts as in its folder, which the result screen opens.
+        assert_eq!(summary.folders.dlog, Some(root.join(DLOG_DIR)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// `footage`, plus a D-Log clip with a sidecar in a subfolder.
     fn footage_with_sub(name: &str) -> PathBuf {
         let root = footage(name);
@@ -1246,6 +1284,23 @@ mod tests {
         assert!(dest.join("DL_A.MP4").exists() && root.join("A.MP4").exists());
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(dest).unwrap();
+    }
+
+    #[test]
+    fn leaves_clips_in_a_destination_inside_the_folder_where_they_are() {
+        for (name, action, layout) in [("inside-names", Action::Rename, Layout::Gather), ("inside-each", Action::Folders, Layout::Each)] {
+            let root = footage_with_sub(name);
+            let dest = root.join("Out");
+            fs::create_dir_all(&dest).unwrap();
+            let into = Options { destination: Some(dest.clone()), layout, ..options(Mode::Copy, action, true) };
+            sort_with(&root, &into);
+            let sorted = listing(&dest);
+            // Sorting again finds the copies in the destination too, already where they belong: no Out\Out.
+            let again = sort_with(&root, &into).summary;
+            assert_eq!((again.dlog, again.dlog2, again.dlogm, again.existing), (0, 0, 0, 8), "{name}");
+            assert_eq!(listing(&dest), sorted, "{name}");
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

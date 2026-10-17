@@ -206,7 +206,9 @@ By default clips are sorted in the scanned folder (**Current folder**).
 straight into a project, for example — and **Save here instead** goes back.
 With **Names** or **Per folder** (§4.5), clips keep their subfolders under the
 destination. Picking the scanned folder
-itself is the same as **Current folder**. The destination isn't remembered:
+itself is the same as **Current folder**. A destination inside the scanned
+folder works too: when **Include subfolders** finds the clips an earlier sort
+put there, they're already where they belong and stay put. The destination isn't remembered:
 each session starts with the folder itself.
 
 If the destination is deleted before the sort starts, D-Sep stops with *The
@@ -330,7 +332,9 @@ every sort needs a scan first; **Sort again** (§6) rescans.
 The controls give way to a progress panel:
 
 - **What's happening** — *Copying 3 of 12*, *Moving*, *Renaming*, *Moving
-  back* (§7), or *Verifying* while a copy is read back.
+  back* (§7), or *Verifying* while a copy is read back. Like the button
+  (§4.9), it counts only the clips not already in place, which keep their
+  *already sorted* mark.
 - **How much** — bytes done of the total, or a percentage when verifying (the
   bytes would add up to twice the clips' size).
 - **Speed and time left** — when bytes are really copied, from the last few
