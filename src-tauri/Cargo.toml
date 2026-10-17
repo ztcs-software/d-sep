@@ -1,6 +1,6 @@
 [package]
 name = "d-sep"
-version = "1.0.0-beta-1"
+version = "1.0.0"
 description = "Separate DJI D-Log, D-Log 2 and D-Log M recordings"
 authors = ["ZTCS Software"]
 license = "MIT"
