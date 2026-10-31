@@ -34,7 +34,7 @@ moov/meta/ilst  →  "D-Log" | "D-Log2" | "D-Log M" | …
 
 `moov/udta/meta` is checked as well, in case a firmware puts it there.
 (Credit to [dji-clip-color](https://github.com/erik-sutton95/dji-clip-color)
-for documenting the key; About says so too.)
+for documenting the key.)
 
 - **Spelling doesn't matter** — only letters and digits are compared, ignoring
   case, so "D-Log M", "D-LogM" and "DLogM" are all D-Log M, and "D-Log2" is
@@ -105,7 +105,9 @@ Up to 8 clips are read at once, so one slow file holds up only itself.
 DJI cameras write files next to each clip with the same name: `.LRF` proxies,
 `.SRT` telemetry, and so on. A sidecar is any non-video file in the same
 folder whose name, without its extension, matches the clip's, ignoring case.
-Sidecars travel with their clip and get the same prefix (§4.7).
+Sidecars travel with their clip and get the same prefix (§4.7). When an `.mp4`
+and a `.mov` share a name, the sidecars go with the `.mp4`: DJI cameras write
+them next to their `.MP4` clips.
 
 ### 2.4 Scan progress and Cancel
 
@@ -320,8 +322,10 @@ every sort needs a scan first; **Sort again** (§6) rescans.
   partial file is deleted the next time that clip is copied.
 - **Moves across drives** write the copy straight to the disk rather than to
   Windows' cache, and flush it and its name to the disk before the original is
-  deleted. If the original can't be deleted, the clip is reported as *Copied,
-  but the original couldn't be removed*.
+  deleted. If the original can't be deleted (a locked card, say), the copy
+  stays and counts, its sidecars are copied rather than moved, and the clip
+  is listed as *Copied, but the original couldn't be removed*. Undo leaves
+  such a clip alone, as its original never left.
 - **What D-Sep deletes** — only its own partial copies, the folders it made
   and left empty (§5.4), and the original of a move to another drive once its
   copy is safely on the disk.
@@ -381,7 +385,9 @@ once it has stopped.
   scanned folder and the reason. A sidecar that failed is listed on its own.
 - **Buttons** — **Open folder** (where the clips went), **Undo** (after a
   move, §7), **Sort again** (scans the same folder again; Undo won't be
-  offered after that, and its tooltip says so) and **Choose another folder…**.
+  offered after that, and its tooltip says so) and **Choose another folder…**
+  (its tooltip says the same after a move, as does the overlay when a folder is
+  dropped on the window).
 
 ---
 
@@ -410,8 +416,8 @@ A copy has nothing to undo: the originals are where they were.
 
 The cog in the top-right corner opens a menu:
 
-- **About** — the logo, the version, *© 2026 ZTCS · MIT License*, the credit
-  for the profile key, and links to **GitHub** and **Third-party licenses**
+- **About** — the logo, the version, *© 2026 ZTCS · MIT License*, and links
+  to **GitHub** and **Third-party licenses**
   (the open-source software D-Sep is built with, and their licenses, shipped
   with the app).
 - **GitHub** — opens the project page in the default browser.

@@ -2,8 +2,8 @@ name: CI
 
 # Runs the checks the release checklist expects to be green: svelte-check, the Vite build, the Vitest suite
 # (which includes the release version-agreement gate in tests/versions.test.ts and the Rust ↔ TypeScript IPC
-# agreement in tests/ipc.test.ts), and the Rust tests. Releases are handled by release.yml; this workflow never
-# publishes anything.
+# agreement in tests/ipc.test.ts), the Rust tests, and npm and cargo audits for known vulnerabilities. Releases are
+# handled by release.yml; this workflow never publishes anything.
 #
 # Triggers on pushes to main so each merge commit gets its own verdict, and on PRs to main so the merge gate
 # sees a check before merge. Dev branches get CI once they open a PR. NOTE: this workflow does NOT gate
@@ -39,6 +39,8 @@ jobs:
           cache: npm
 
       - run: npm ci
+      # A known vulnerability in a package the UI ships with fails CI. Dev tools don't ship, so they're left out.
+      - run: npm audit --omit=dev
       - run: npm run check
       - run: npm run build
       - run: npm test
@@ -70,4 +72,11 @@ jobs:
         working-directory: src-tauri
 
       - run: cargo clippy --all-targets --locked -- -D warnings
+        working-directory: src-tauri
+
+      # A known vulnerability in Cargo.lock fails CI; crates RustSec only calls unmaintained or unsound are warnings.
+      # cargo-audit is pinned to a version that builds on the pinned toolchain (its rust-version is 1.88), and
+      # rust-cache keeps the installed binary between runs.
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
         working-directory: src-tauri

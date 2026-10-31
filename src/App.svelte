@@ -181,8 +181,11 @@
   const workVerb = $derived(phase === "undoing" ? "undo" : verbFor(sorted.action, sorted.mode, sorted.destination));
   /** Some log clips are in subfolders, so where their folders go is a choice. */
   const nested = $derived(logClips.some((c) => /[\\/]/.test(c.name)));
-  /** A move to another drive is a copy, and takes the time and the space one does. */
-  const copies = $derived(mode === "copy" || (!!space && !space.sameDrive));
+  /**
+   * A move to another drive is a copy, and takes the time and the space one does. Until the drive is known, a move may
+   * be one, so Verify copies isn't turned off.
+   */
+  const copies = $derived(mode === "copy" || !space?.sameDrive);
   const needed = $derived(copies ? sortBytes : 0);
   const short = $derived(!!space && needed > space.free);
   // Renames within a drive are instant, so a rate means nothing for them.
@@ -286,6 +289,8 @@
   $effect(() => {
     if (phase !== "ready") return;
     const request = ++spaceRequest;
+    // The answer for the last destination no longer holds.
+    space = null;
     diskSpace(destination).then(
       (result) => request === spaceRequest && (space = result),
       () => request === spaceRequest && (space = null),
@@ -888,7 +893,13 @@
         >
           Sort again
         </button>
-        <button class="secondary" onclick={browse}>Choose another folder…</button>
+        <button
+          class="secondary"
+          title={result.undoable ? "Pick another folder to scan. Undo won't be offered after that." : undefined}
+          onclick={browse}
+        >
+          Choose another folder…
+        </button>
       </div>
     </section>
   {:else}
@@ -1226,7 +1237,10 @@
   {/if}
 
   {#if dragging && (root || scanning)}
-    <div class="overlay">Drop to scan this folder</div>
+    <div class="overlay">
+      Drop to scan this folder
+      {#if phase === "done" && summary?.undoable}<span class="muted">Undo won't be offered after that.</span>{/if}
+    </div>
   {/if}
 </div>
 
@@ -2547,6 +2561,8 @@
     inset: 8px;
     display: grid;
     place-items: center;
+    align-content: center;
+    gap: 4px;
     border: 2px solid var(--dlog);
     border-radius: 16px;
     background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -2554,5 +2570,10 @@
     font-size: 15px;
     font-weight: 600;
     pointer-events: none;
+  }
+
+  .overlay .muted {
+    font-size: 12.5px;
+    font-weight: 400;
   }
 </style>

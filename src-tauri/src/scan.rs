@@ -131,6 +131,9 @@ fn collect(dir: &Path, recursive: bool, skip_outputs: bool, out: &mut Vec<Found>
     for (path, size) in others {
         sidecars.entry(stem(&path)).or_default().push(Sidecar { path, size });
     }
+    // Sidecars an .mp4 and a .mov share are the .mp4's: DJI cameras write their .LRF and .SRT files next to .MP4s, so
+    // a .mov of the same name is more likely an export.
+    videos.sort_by_key(|(path, ..)| !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")));
     for (path, size, online_only) in videos {
         let mut own = sidecars.remove(&stem(&path)).unwrap_or_default();
         own.sort_by(|a, b| a.path.cmp(&b.path));
@@ -275,6 +278,18 @@ mod tests {
         fs::write(root.join("A.MP4"), fake_clip(Some("D-Log"))).unwrap();
         let names: Vec<_> = scan(&root, true).unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, ["A.MP4"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gives_sidecars_an_mp4_and_a_mov_share_to_the_mp4() {
+        let root = temp_dir("sharedname");
+        fs::write(root.join("A.MOV"), fake_clip(Some("D-Log"))).unwrap();
+        fs::write(root.join("A.MP4"), fake_clip(Some("D-Log"))).unwrap();
+        fs::write(root.join("A.LRF"), b"proxy").unwrap();
+        let clips = scan(&root, false).unwrap();
+        let sidecars: Vec<_> = clips.iter().map(|c| (c.name.as_str(), c.sidecars.len())).collect();
+        assert_eq!(sidecars, [("A.MOV", 0), ("A.MP4", 1)]);
         fs::remove_dir_all(root).unwrap();
     }
 

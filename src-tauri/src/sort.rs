@@ -383,17 +383,25 @@ fn place(
     let original = clip.path.file_stem().unwrap_or_default();
     let (stem, there) = stem_in(clip, dir, prefix, sidecars);
     let (mode, verify) = (options.mode, options.verify);
+    // Whether the clip itself stays where it is: it was already there, or a move to another drive copied it but
+    // couldn't remove it (from a locked card, say), which leaves a finished copy in place, and is reported.
+    let mut stays = there;
     if !there {
         let target = dir.join(target_name(&clip.path, prefix, &stem, original));
-        transfer(&clip.path, &target, mode, verify, cancel, on_bytes)?;
-        if mode == Mode::Move {
-            journal.moved.push((clip.path.clone(), target));
+        match transfer(&clip.path, &target, mode, verify, cancel, on_bytes) {
+            Ok(()) if mode == Mode::Move => journal.moved.push((clip.path.clone(), target)),
+            Ok(()) => {}
+            Err(e) if mode == Mode::Move && is_copy(&clip.path, &target) => {
+                summary.failed.push(Failure { file: clip.name.clone(), reason: crate::describe(e) });
+                stays = true;
+            }
+            Err(e) => return Err(e),
         }
     }
 
-    // A clip that was already there still gets the sidecars it lacks, e.g. after a run without them. The clip
-    // itself stays where it is, so even in a move they're copied, not taken away from it.
-    let sidecar_mode = if there { Mode::Copy } else { mode };
+    // A clip that stays where it is keeps its sidecars too, so even in a move they're copied, not taken away from it.
+    // One that was already there still gets the sidecars it lacks, e.g. after a run without them.
+    let sidecar_mode = if stays { Mode::Copy } else { mode };
     let mut offset = clip.size * passes;
     for sidecar in sidecars {
         let target = dir.join(target_name(&sidecar.path, prefix, &stem, original));
@@ -538,8 +546,9 @@ pub fn undo(journal: &mut Journal, root: &Path, cancel: &AtomicBool, mut report:
             }
             Err(e) => {
                 undone.failed.push(Failure { file: progress.file.clone(), reason: crate::describe(e) });
-                // A file that's gone can't be moved back, so it isn't tried again.
-                if to.exists() {
+                // A file that's gone can't be moved back, and one whose copy is back already (moving it back from
+                // another drive copied it, but couldn't remove the sorted one) needn't be, so neither is tried again.
+                if to.exists() && !is_copy(&to, &from) {
                     kept.push((from, to));
                 }
             }
@@ -715,7 +724,8 @@ fn compare(original: &Path, copy: &Path, cancel: &AtomicBool, on_bytes: &mut dyn
         return Err(mismatch());
     }
     let mut raw = vec![0u8; CHUNK + ALIGN];
-    let skew = raw.as_ptr().align_offset(ALIGN);
+    // Worked out by hand: align_offset may give up and return usize::MAX.
+    let skew = raw.as_ptr().addr().wrapping_neg() % ALIGN;
     let read_back = &mut raw[skew..skew + CHUNK];
     let mut expected = vec![0u8; CHUNK];
     let mut done = 0;
@@ -1385,6 +1395,23 @@ mod tests {
         let undone = undo(&mut outcome.journal, &root, &AtomicBool::new(false), |_| {});
         assert_eq!((undone.restored, undone.remaining), (1, 0));
         assert!(!root.join(DLOG2_DIR).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn undo_lets_go_of_a_file_already_back() {
+        let root = footage("undoback");
+        let mut outcome = sort_with(&root, &options(Mode::Move, Action::Folders, true));
+        // A copy of a clip is back where it was, as when moving it back from another drive copied it but couldn't
+        // remove the sorted one.
+        let (sorted, back) = (root.join(DLOG2_DIR).join("B.MP4"), root.join("B.MP4"));
+        fs::copy(&sorted, &back).unwrap();
+        fs::File::options().write(true).open(&back).unwrap().set_modified(fs::metadata(&sorted).unwrap().modified().unwrap()).unwrap();
+
+        // It's reported, and not tried again: a second undo would fail on it every time.
+        let undone = undo(&mut outcome.journal, &root, &AtomicBool::new(false), |_| {});
+        assert_eq!((undone.restored, undone.remaining, undone.failed.len()), (4, 0, 1));
+        assert!(outcome.journal.moved.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
