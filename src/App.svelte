@@ -29,9 +29,7 @@
     extension,
     formatBytes,
     formatDuration,
-    joinPath,
     plural,
-    relativeTo,
     sameFolder,
     splitPath,
   } from "./lib/format";
@@ -44,17 +42,15 @@
     saveOptions,
     type Theme,
   } from "./lib/options";
+  import { FOLDERS, LOG_KINDS, isLog, newPrefix, targetOf, type LogKind } from "./lib/target";
 
   type Phase = "idle" | "scanning" | "ready" | "sorting" | "undoing" | "done";
   type Sheet = "about" | "help" | "licenses";
-  type LogKind = "dlog" | "dlog2" | "dlogm";
   /** A scan under way: its folder, and how far it's got. */
   type Scanning = { path: string; found: number; probed: number };
   /** The options of the last sort, for its result screen. */
   type Sorted = { mode: Mode; action: Action; destination: string | null; verify: boolean };
 
-  const LOG_KINDS: LogKind[] = ["dlog", "dlog2", "dlogm"];
-  const FOLDERS: Record<LogKind, string> = { dlog: "D-Log", dlog2: "D-Log 2", dlogm: "D-Log M" };
   const THEMES: { theme: Theme; name: string; title: string }[] = [
     { theme: "light", name: "Light", title: "Always light" },
     { theme: "dark", name: "Dark", title: "Always dark" },
@@ -181,8 +177,11 @@
   const workVerb = $derived(phase === "undoing" ? "undo" : verbFor(sorted.action, sorted.mode, sorted.destination));
   /** Some log clips are in subfolders, so where their folders go is a choice. */
   const nested = $derived(logClips.some((c) => /[\\/]/.test(c.name)));
-  /** A move to another drive is a copy, and takes the time and the space one does. */
-  const copies = $derived(mode === "copy" || (!!space && !space.sameDrive));
+  /**
+   * A move to another drive is a copy, and takes the time and the space one does. Until the drive is known, a move may
+   * be one, so Verify copies isn't turned off.
+   */
+  const copies = $derived(mode === "copy" || !space?.sameDrive);
   const needed = $derived(copies ? sortBytes : 0);
   const short = $derived(!!space && needed > space.free);
   // Renames within a drive are instant, so a rate means nothing for them.
@@ -191,7 +190,9 @@
   );
   const timeLeft = $derived(progress && rate > 0 ? (progress.bytesTotal - progress.bytesDone) / rate : 0);
   // Log clips to sort whose names already start with their prefix, so they keep them.
-  const keeping = $derived(action === "folders" ? 0 : toSort.filter((c) => !newPrefix(c)).length);
+  /** What decides where each log clip goes, for its prefix and tooltip in the list. */
+  const placing = $derived({ root, destination, action, layout, prefixes });
+  const keeping = $derived(action === "folders" ? 0 : toSort.filter((c) => !newPrefix(c, placing)).length);
   /** What's wrong with the prefixes, and whose they are, so those fields can be marked. */
   const prefixCheck = $derived.by((): { problem: string; bad: LogKind[] } => {
     if (action === "folders") return { problem: "", bad: [] };
@@ -286,6 +287,8 @@
   $effect(() => {
     if (phase !== "ready") return;
     const request = ++spaceRequest;
+    // The answer for the last destination no longer holds.
+    space = null;
     diskSpace(destination).then(
       (result) => request === spaceRequest && (space = result),
       () => request === spaceRequest && (space = null),
@@ -343,10 +346,6 @@
     }
   }
 
-  function isLog(kind: Clip["profile"]["kind"]): kind is LogKind {
-    return (LOG_KINDS as string[]).includes(kind);
-  }
-
   /** Renaming is a move that stays in the clip's folder; into another folder, it's a move. */
   function verbFor(action: Action, mode: Mode, destination: string | null): "copy" | "move" | "rename" {
     return mode === "copy" ? "copy" : action === "rename" && !destination ? "rename" : "move";
@@ -371,42 +370,6 @@
     const already = `${clips} ${one ? "was" : "were"} already in place (same size and date)`;
     if (sorted.mode === "copy") return `${already}, ${skipped}.`;
     return `${already}, so the original${one ? " stays where it is" : "s stay where they are"}.`;
-  }
-
-  /** The prefix a log clip will get in front of its name, or "" when it keeps it. */
-  function newPrefix(clip: Clip): string {
-    const kind = clip.profile.kind;
-    if (action === "folders" || !isLog(kind)) return "";
-    const prefix = prefixes[kind];
-    return splitPath(clip.name).name.toLowerCase().startsWith(prefix.toLowerCase()) ? "" : prefix;
-  }
-
-  /** The folder a log clip goes to. Mirrors Job::new in sort.rs. */
-  function targetDir(clip: Clip, kind: LogKind): string {
-    const base = destination ?? root;
-    // A clip already inside a destination that's inside the scanned folder keeps its place there.
-    const inside = relativeTo(base, root) === null ? null : relativeTo(splitPath(clip.path).parent, base);
-    const sub = inside ?? splitPath(clip.name).parent;
-    const own = sub ? joinPath(base, sub) : base;
-    if (action === "rename") return own;
-    return outputDir(layout === "each" ? own : base, FOLDERS[kind]);
-  }
-
-  /** The profile's folder inside `dir`, or beside it when `dir` is one of them. Mirrors output_dir in sort.rs. */
-  function outputDir(dir: string, name: string): string {
-    const own = splitPath(dir);
-    const is = (folder: string) => own.name.toLowerCase() === folder.toLowerCase();
-    if (is(name)) return dir;
-    return Object.values(FOLDERS).some(is) ? joinPath(own.parent, name) : joinPath(dir, name);
-  }
-
-  /** Where a log clip will end up, relative to where the clips go when it's inside; "" for clips that stay. */
-  function targetOf(clip: Clip): string {
-    const kind = clip.profile.kind;
-    if (!isLog(kind)) return "";
-    const path = joinPath(targetDir(clip, kind), newPrefix(clip) + splitPath(clip.name).name);
-    const base = joinPath(destination ?? root, "");
-    return path.toLowerCase().startsWith(base.toLowerCase()) ? path.slice(base.length) : path;
   }
 
   function bytes(list: Clip[], withSidecars: boolean): number {
@@ -583,7 +546,8 @@
         break;
       case "ArrowUp":
       case "ArrowLeft":
-        next = at - 1;
+        // From the menu itself (after a click between its items), up goes to the last item, as down goes to the first.
+        next = Math.max(at, 0) - 1;
         break;
       case "Home":
         next = 0;
@@ -670,7 +634,7 @@
       case "dlog2":
       case "dlogm": {
         const where = placedAlready.has(clip.path) ? "Already sorted:" : "Goes to";
-        return { text: FOLDERS[clip.profile.kind], tone: clip.profile.kind, title: `${where} ${targetOf(clip)}` };
+        return { text: FOLDERS[clip.profile.kind], tone: clip.profile.kind, title: `${where} ${targetOf(clip, placing)}` };
       }
       case "other":
         return { text: clip.profile.label, tone: "", title: "Not D-Log, D-Log 2 or D-Log M, left untouched" };
@@ -888,7 +852,13 @@
         >
           Sort again
         </button>
-        <button class="secondary" onclick={browse}>Choose another folder…</button>
+        <button
+          class="secondary"
+          title={result.undoable ? "Pick another folder to scan. Undo won't be offered after that." : undefined}
+          onclick={browse}
+        >
+          Choose another folder…
+        </button>
       </div>
     </section>
   {:else}
@@ -952,8 +922,8 @@
       {:else}
         {#each clips as clip (clip.path)}
           {@const tag = badge(clip)}
-          {@const prefix = newPrefix(clip)}
-          {@const target = targetOf(clip)}
+          {@const prefix = newPrefix(clip, placing)}
+          {@const target = targetOf(clip, placing)}
           {@const file = splitPath(clip.name).name}
           {@const dir = clip.name.slice(0, clip.name.length - file.length)}
           {@const already = placedAlready.has(clip.path)}
@@ -1226,7 +1196,10 @@
   {/if}
 
   {#if dragging && (root || scanning)}
-    <div class="overlay">Drop to scan this folder</div>
+    <div class="overlay">
+      Drop to scan this folder
+      {#if phase === "done" && summary?.undoable}<span class="muted">Undo won't be offered after that.</span>{/if}
+    </div>
   {/if}
 </div>
 
@@ -2547,6 +2520,8 @@
     inset: 8px;
     display: grid;
     place-items: center;
+    align-content: center;
+    gap: 4px;
     border: 2px solid var(--dlog);
     border-radius: 16px;
     background: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -2554,5 +2529,10 @@
     font-size: 15px;
     font-weight: 600;
     pointer-events: none;
+  }
+
+  .overlay .muted {
+    font-size: 12.5px;
+    font-weight: 400;
   }
 </style>

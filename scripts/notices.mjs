@@ -75,7 +75,8 @@ await build({
 });
 const npmDirs = new Set();
 for (const id of moduleIds) {
-  const at = /node_modules[\\/](@[^\\/]+[\\/])?[^\\/]+/.exec(id);
+  // The last node_modules in the path: a package nested in another's is a package of its own.
+  const at = [...id.matchAll(/node_modules[\\/](@[^\\/]+[\\/])?[^\\/]+/g)].at(-1);
   if (at) npmDirs.add(id.slice(0, at.index + at[0].length));
 }
 

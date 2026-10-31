@@ -339,6 +339,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn finds_the_profile_in_udta_meta_too() {
+        let ftyp = atom(b"ftyp", b"isom\0\0\0\0isom");
+        let moov = atom(b"moov", &[atom(b"mvhd", &[0; 100]), atom(b"udta", &dji_meta("D-Log M", false, 0))].concat());
+        let clip = [ftyp, atom(b"mdat", &[0xAB; 100]), moov].concat();
+        assert_eq!(probe_bytes("udta", &clip).as_deref(), Some("D-Log M"));
+    }
+
+    #[test]
+    fn leaves_a_keys_box_too_big_to_be_dji_unread() {
+        // A `keys` box naming only the profile, padded to `size` bytes.
+        let clip = |size: usize| {
+            let mut keys = vec![0, 0, 0, 0];
+            keys.extend(1u32.to_be_bytes());
+            keys.extend(atom(b"mdta", GAMMA_KEY.as_bytes()));
+            keys.resize(size, 0);
+            let mut data = 1u32.to_be_bytes().to_vec();
+            data.extend([0; 4]);
+            data.extend(b"D-Log");
+            let ilst = atom(b"ilst", &atom(&1u32.to_be_bytes(), &atom(b"data", &data)));
+            let meta = atom(b"meta", &[atom(b"hdlr", &[0; 24]), atom(b"keys", &keys), ilst].concat());
+            [atom(b"ftyp", b"isom\0\0\0\0isom"), atom(b"moov", &meta)].concat()
+        };
+        assert_eq!(probe_bytes("keysfits", &clip(MAX_READ_BYTES as usize)).as_deref(), Some("D-Log"));
+        assert_eq!(probe_bytes("keystoobig", &clip(MAX_READ_BYTES as usize + 1)), None);
+    }
+
+    #[test]
     fn handles_64_bit_box_sizes() {
         let clip = fake_clip(Some("D-Log2"));
         // Rewrite `mdat` (after the 20-byte ftyp) with a 16-byte "largesize" header.

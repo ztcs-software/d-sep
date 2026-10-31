@@ -102,9 +102,11 @@ jobs:
       - id: notes
         if: steps.gate.outputs.should_release == 'true'
         name: Read release notes
+        # Passed in the environment rather than written into the script, so the shell never parses its text.
+        env:
+          VERSION: ${{ steps.gate.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${{ steps.gate.outputs.version }}"
           {
             echo 'body<<RELEASE_NOTES_EOF'
             # printf %s\n guarantees a trailing newline even if the notes file doesn't end with one — otherwise
@@ -135,6 +137,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
+
+      # `tauri build` runs cargo without --locked, so a Cargo.lock that no longer matches Cargo.toml would be updated
+      # on the spot, and the release built from dependencies no test has run. CI's `cargo test --locked` would catch
+      # it, but this job doesn't wait for CI, so it fails here instead.
+      - run: cargo fetch --locked
+        working-directory: src-tauri
 
       - run: npm ci
 

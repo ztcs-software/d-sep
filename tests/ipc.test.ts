@@ -98,12 +98,17 @@ function rename(name: string, attribute: string): string {
 
 /** The JSON field names of a Rust struct. */
 function rustFields(name: string): string[] {
+  return sorted(Object.keys(rustFieldTypes(name)));
+}
+
+/** A Rust struct's fields, by JSON name, with their Rust types. Every field sits on a line of its own. */
+function rustFieldTypes(name: string): Record<string, string> {
   const { body, before } = block(rust, new RegExp(`\\bstruct ${name}\\s*\\{`), `Rust struct ${name}`);
   const code = stripComments(body);
   expect(code, `field-level serde attributes on ${name} aren't understood by this test`).not.toMatch(/#\[serde/);
   const attribute = serdeAttribute(before);
-  return sorted(
-    [...code.matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:/gm)].map((m) => rename(m[1], attribute)),
+  return Object.fromEntries(
+    [...code.matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?(\w+)\s*:\s*(.+?),?\s*$/gm)].map((m) => [rename(m[1], attribute), m[2]]),
   );
 }
 
@@ -117,6 +122,35 @@ function tsFields(name: string): string[] {
     body = body.replace(/\{[^{}]*\}/g, "{}").replace(/\([^()]*\)/g, "()");
   }
   return sorted([...body.matchAll(/(\w+)\??\s*:/g)].map((m) => m[1]));
+}
+
+/** An api.ts interface's members with their types, spaces taken out. */
+function tsFieldTypes(name: string): Record<string, string> {
+  const { body } = block(apiTs, new RegExp(`export interface ${name}\\s*\\{`), `api.ts interface ${name}`);
+  return Object.fromEntries(
+    [...stripComments(body).matchAll(/(\w+)\??\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].replace(/\s+/g, "")]),
+  );
+}
+
+const MIRRORED: Record<string, string> = { ...MIRRORS.structs, ...MIRRORS.enums };
+
+/** The type api.ts should give the JSON of a Rust type, spaces taken out. A command's `Result` is its `Ok` side. */
+function tsType(rust: string): string {
+  const type = rust.replace(/\s+/g, "");
+  const inside = (outer: string) => new RegExp(`^${outer}<(.+)>$`).exec(type)?.[1];
+  const ok = /^Result<(.+),String>$/.exec(type)?.[1];
+  if (ok !== undefined) return tsType(ok);
+  const option = inside("Option");
+  if (option) return `${tsType(option)}|null`;
+  const list = inside("Vec");
+  if (list) return `${tsType(list)}[]`;
+  if (type === "" || type === "()") return "void";
+  if (type === "String" || type === "PathBuf") return "string";
+  if (/^[ui](8|16|32|64|size)$|^f(32|64)$/.test(type)) return "number";
+  if (type === "bool") return "boolean";
+  const name = type.split("::").pop()!;
+  expect(MIRRORED, `${rust} has no mirror in api.ts; add it, and to MIRRORS`).toHaveProperty(name);
+  return MIRRORED[name];
 }
 
 /** A Rust enum's serde attribute and its variants, as the JSON names them, with whether each carries data. */
@@ -168,6 +202,15 @@ describe("commands (main.rs ↔ api.ts)", () => {
         expect(sorted(sent), `invoke("${command}") in api.ts`).toEqual(sorted(expected));
       }
     });
+
+    it(`${command} returns what api.ts expects`, () => {
+      const signature = new RegExp(`fn\\s+${command}\\s*\\([^)]*\\)\\s*(?:->\\s*([^{]+?))?\\s*\\{`);
+      const returned = signature.exec(mainRs);
+      expect(returned, `fn ${command} in main.rs`).not.toBeNull();
+      const generic = new RegExp(`\\binvoke<([^>]*)>\\(\\s*"${command}"`).exec(apiTs)?.[1];
+      expect(generic, `invoke<…>("${command}") in api.ts names its result type`).toBeDefined();
+      expect(generic!.replace(/\s+/g, "")).toBe(tsType(returned![1] ?? ""));
+    });
   }
 });
 
@@ -186,6 +229,11 @@ describe("serialized types (Rust ↔ api.ts)", () => {
   for (const [rustName, tsName] of Object.entries(MIRRORS.structs)) {
     it(`${rustName} ↔ ${tsName}`, () => {
       expect(tsFields(tsName)).toEqual(rustFields(rustName));
+    });
+
+    it(`${rustName} ↔ ${tsName}: field types`, () => {
+      const rustTypes = Object.entries(rustFieldTypes(rustName)).map(([field, type]) => [field, tsType(type)]);
+      expect(tsFieldTypes(tsName)).toEqual(Object.fromEntries(rustTypes));
     });
   }
 
