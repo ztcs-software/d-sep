@@ -40,6 +40,32 @@ struct AppState {
     asking: AtomicBool,
 }
 
+impl AppState {
+    /// Keeps a finished scan to sort from. It starts afresh: only its folder may be opened, and the last move is no
+    /// longer offered for undoing.
+    fn scanned(&self, scan: &Scan) {
+        *self.scan.lock().unwrap() = Some(scan.clone());
+        *self.root.lock().unwrap() = Some(scan.root.clone());
+        *self.openable.lock().unwrap() = vec![scan.root.clone()];
+        *self.journal.lock().unwrap() = None;
+    }
+
+    /// After a sort: the folders it put clips in may be opened, and a move is kept for undoing.
+    fn sorted(&self, summary: &sort::Summary, journal: sort::Journal) {
+        let folders = &summary.folders;
+        let used = [Some(&summary.folder), folders.dlog.as_ref(), folders.dlog2.as_ref(), folders.dlogm.as_ref()];
+        self.openable.lock().unwrap().extend(used.into_iter().flatten().cloned());
+        *self.journal.lock().unwrap() = summary.undoable.then_some(journal);
+    }
+
+    /// After an undo, which took the journal: what it couldn't put back is kept, to try again.
+    fn undone(&self, undone: &sort::Undone, journal: sort::Journal) {
+        if undone.remaining > 0 {
+            *self.journal.lock().unwrap() = Some(journal);
+        }
+    }
+}
+
 /// A sort or an undo, by the id the UI gave it. Each gets its own cancel flag, so a Cancel that arrives after its
 /// work has ended can't stop the next one, and one that arrives before its work has started still stops it.
 #[derive(Default)]
@@ -115,12 +141,9 @@ async fn scan_folder(
     .await
     .map_err(describe)?
     .map_err(describe)?;
+    // A cancelled scan leaves everything as it was, the last move's undo included.
     if let Some(scan) = &scan {
-        *state.scan.lock().unwrap() = Some(scan.clone());
-        *state.root.lock().unwrap() = Some(scan.root.clone());
-        *state.openable.lock().unwrap() = vec![scan.root.clone()];
-        // A new scan starts afresh: the last move is no longer offered for undoing.
-        *state.journal.lock().unwrap() = None;
+        state.scanned(scan);
     }
     Ok(scan)
 }
@@ -164,10 +187,7 @@ async fn sort_clips(
     .await;
     finish_work(&app, &state);
     let sort::Outcome { summary, journal } = outcome.map_err(describe)?;
-    let folders = &summary.folders;
-    let used = [Some(&summary.folder), folders.dlog.as_ref(), folders.dlog2.as_ref(), folders.dlogm.as_ref()];
-    state.openable.lock().unwrap().extend(used.into_iter().flatten().cloned());
-    *state.journal.lock().unwrap() = summary.undoable.then_some(journal);
+    state.sorted(&summary, journal);
     Ok(summary)
 }
 
@@ -198,9 +218,7 @@ async fn undo_sort(
     .await;
     finish_work(&app, &state);
     let (undone, journal) = undone.map_err(describe)?;
-    if undone.remaining > 0 {
-        *state.journal.lock().unwrap() = Some(journal);
-    }
+    state.undone(&undone, journal);
     Ok(undone)
 }
 
@@ -454,6 +472,41 @@ mod tests {
         assert!(!undo.load(Ordering::SeqCst));
         work.stop(2);
         assert!(undo.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn keeps_a_move_for_undo_until_the_next_scan() {
+        let state = AppState::default();
+        let root = PathBuf::from(r"E:\DCIM");
+        let scan = Scan { root: root.clone(), clips: Vec::new() };
+        let journal = |state: &AppState| state.journal.lock().unwrap().is_some();
+        let openable = |state: &AppState| state.openable.lock().unwrap().clone();
+        state.scanned(&scan);
+        assert_eq!(openable(&state), std::slice::from_ref(&root));
+
+        // A copy has nothing to undo; a move does. Either way, the folders its clips went to may be opened.
+        let into = PathBuf::from(r"F:\Project");
+        let folders = sort::ProfileFolders { dlog: Some(into.join("D-Log")), ..Default::default() };
+        let copied = sort::Summary { folder: into.clone(), folders, ..Default::default() };
+        state.sorted(&copied, sort::Journal::default());
+        assert!(!journal(&state));
+        assert_eq!(openable(&state), [root.clone(), into.clone(), into.join("D-Log")]);
+        state.sorted(&sort::Summary { undoable: true, ..copied }, sort::Journal::default());
+        assert!(journal(&state));
+
+        // An undo takes the journal, and gives it back only when files remain to put back.
+        let taken = state.journal.lock().unwrap().take().unwrap();
+        state.undone(&sort::Undone { remaining: 1, ..Default::default() }, taken);
+        assert!(journal(&state));
+        let taken = state.journal.lock().unwrap().take().unwrap();
+        state.undone(&sort::Undone::default(), taken);
+        assert!(!journal(&state));
+
+        // A new scan drops the last move's undo, and the folders the sort opened.
+        state.sorted(&sort::Summary { undoable: true, folder: into, ..Default::default() }, sort::Journal::default());
+        state.scanned(&scan);
+        assert!(!journal(&state));
+        assert_eq!(openable(&state), [root]);
     }
 
     #[cfg(windows)]

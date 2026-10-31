@@ -596,19 +596,23 @@ fn transfer(
     use windows_sys::Win32::Foundation::ERROR_NOT_SAME_DEVICE;
     match mode {
         Mode::Copy => copy(src, dst, verify, false, cancel, on_bytes),
-        // Within one drive a move is an instant rename. Across drives it's a copy, written straight to the disk
-        // rather than left in the cache, and flushed with its name before the original goes.
+        // Within one drive a move is an instant rename.
         Mode::Move => match rename(src, dst) {
-            Err(e) if e.raw_os_error() == Some(ERROR_NOT_SAME_DEVICE as i32) => {
-                copy(src, dst, verify, true, cancel, on_bytes)?;
-                flush(dst)?;
-                fs::remove_file(src).map_err(|e| {
-                    io::Error::new(e.kind(), format!("Copied, but the original couldn't be removed: {}", crate::describe(e)))
-                })
-            }
+            Err(e) if e.raw_os_error() == Some(ERROR_NOT_SAME_DEVICE as i32) => move_across(src, dst, verify, cancel, on_bytes),
             renamed => renamed,
         },
     }
+}
+
+/// A move to another drive: a copy, written straight to the disk rather than left in the cache, and flushed with its
+/// name before the original goes. It's the one place a file D-Sep didn't make is deleted.
+#[cfg(windows)]
+fn move_across(src: &Path, dst: &Path, verify: bool, cancel: &AtomicBool, on_bytes: &mut dyn FnMut(u64)) -> io::Result<()> {
+    copy(src, dst, verify, true, cancel, on_bytes)?;
+    flush(dst)?;
+    fs::remove_file(src).map_err(|e| {
+        io::Error::new(e.kind(), format!("Copied, but the original couldn't be removed: {}", crate::describe(e)))
+    })
 }
 
 /// Copies under a temporary name and renames it once complete, so a copy cut short by a crash or a power cut
@@ -1441,6 +1445,22 @@ mod tests {
     }
 
     #[test]
+    fn finishes_an_undo_that_was_stopped() {
+        let root = footage_with_sub("undocancel");
+        let before = (listing(&root), listing(&root.join("sub")));
+        let mut outcome = sort_with(&root, &options(Mode::Move, Action::Both, true));
+        // Stopped while the first file goes back: that one is back, and the other six wait.
+        let cancel = AtomicBool::new(false);
+        let undone = undo(&mut outcome.journal, &root, &cancel, |p| cancel.store(p.index == 1, Ordering::Relaxed));
+        assert_eq!((undone.restored, undone.remaining, undone.cancelled), (1, 6, true));
+
+        let undone = undo(&mut outcome.journal, &root, &AtomicBool::new(false), |_| {});
+        assert_eq!((undone.restored, undone.remaining, undone.cancelled), (6, 0, false));
+        assert_eq!((listing(&root), listing(&root.join("sub"))), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn copies_are_not_undoable() {
         let root = footage("copynoundo");
         let outcome = sort_with(&root, &options(Mode::Copy, Action::Folders, true));
@@ -1474,6 +1494,79 @@ mod tests {
         let err = compare(&dir.join("a"), &dir.join("changed"), &AtomicBool::new(false), &mut |_| {}).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Driven directly: `transfer` only gets here when a rename fails across drives, and a test has one drive.
+    #[cfg(windows)]
+    #[test]
+    fn moves_to_another_drive_by_copying_then_removing_the_original() {
+        let dir = temp_dir("across");
+        let clip = fake_clip(Some("D-Log"));
+        let (src, dst) = (dir.join("A.MP4"), dir.join("B.MP4"));
+        fs::write(&src, &clip).unwrap();
+        let written = fs::metadata(&src).unwrap().modified().unwrap();
+        move_across(&src, &dst, true, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read(&dst).unwrap(), clip);
+        // With its time, so a later sort knows it for a copy.
+        assert_eq!(fs::metadata(&dst).unwrap().modified().unwrap(), written);
+
+        // An original that can't be removed, here held open without delete sharing, stays, next to its finished copy.
+        let (src, dst) = (dir.join("C.MP4"), dir.join("D.MP4"));
+        fs::write(&src, &clip).unwrap();
+        let held = {
+            use std::os::windows::fs::OpenOptionsExt;
+            fs::OpenOptions::new().read(true).share_mode(1).open(&src).unwrap() // FILE_SHARE_READ only
+        };
+        let err = move_across(&src, &dst, false, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+        drop(held);
+        assert!(err.to_string().starts_with("Copied, but the original couldn't be removed"), "{err}");
+        assert!(src.exists() && is_copy(&src, &dst));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_copy_that_does_not_match_its_original_is_removed_and_reported() {
+        use std::io::{Seek, SeekFrom, Write};
+        let root = temp_dir("mismatch");
+        // Three reads' worth, so the original can change once the first has been compared.
+        let mut clip = fake_clip(Some("D-Log"));
+        clip.resize(12 * 1024 * 1024, 0);
+        fs::write(root.join("A.MP4"), &clip).unwrap();
+        let clips = scan(&root, false).unwrap();
+        let verified = Options { verify: true, ..options(Mode::Copy, Action::Folders, true) };
+        let mut changed = false;
+        let summary = run(&root, &clips, &verified, &AtomicBool::new(false), |p| {
+            // Reading back has begun: the original's last byte changes, so the copy no longer matches it, as a copy
+            // the disk got wrong wouldn't.
+            if p.verifying && p.bytes_done > clip.len() as u64 && !changed {
+                let mut original = fs::OpenOptions::new().write(true).open(root.join("A.MP4")).unwrap();
+                original.seek(SeekFrom::End(-1)).unwrap();
+                original.write_all(&[1]).unwrap();
+                changed = true;
+            }
+        })
+        .summary;
+        assert!(changed, "the copy was never read back");
+        assert_eq!(summary.dlog, 0);
+        let failed: Vec<_> = summary.failed.iter().map(|f| (f.file.as_str(), f.reason.as_str())).collect();
+        assert_eq!(failed, [("A.MP4", "The copy doesn't match the original.")]);
+        // The partial copy is gone, and so is the folder made for it.
+        assert!(!root.join(DLOG_DIR).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn gives_raw_calls_paths_past_the_260_character_limit() {
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let raw = |path: &str| verbatim(Path::new(path)).unwrap();
+        assert_eq!(raw(r"C:\Clips\A.MP4"), wide(r"\\?\C:\Clips\A.MP4"));
+        assert_eq!(raw(r"\\nas\footage\A.MP4"), wide(r"\\?\UNC\nas\footage\A.MP4"));
+        assert_eq!(raw(r"\\?\C:\Clips\A.MP4"), wide(r"\\?\C:\Clips\A.MP4"));
+        // Windows doesn't resolve ".", ".." or "/" in a \\?\ path, so they're resolved first.
+        assert_eq!(raw("C:/Clips/./sub/../A.MP4"), wide(r"\\?\C:\Clips\A.MP4"));
     }
 
     #[test]
