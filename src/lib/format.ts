@@ -2,14 +2,16 @@ const UNITS = ["KB", "MB", "GB", "TB"];
 
 /** Sizes the way Explorer shows them (1 KB = 1024 bytes). */
 export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  // Decided on the rounded value, so 1023.6 B is "1.0 KB", not "1024 B".
+  if (Math.round(bytes) < 1024) return `${Math.round(bytes)} B`;
   let value = bytes / 1024;
   let unit = 0;
-  while (value >= 1024 && unit < UNITS.length - 1) {
+  while (Math.round(value) >= 1024 && unit < UNITS.length - 1) {
     value /= 1024;
     unit++;
   }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${UNITS[unit]}`;
+  // One decimal below 10, unless it rounds up to 10.0.
+  return `${value < 9.95 ? value.toFixed(1) : Math.round(value)} ${UNITS[unit]}`;
 }
 
 export function plural(count: number, word: string): string {

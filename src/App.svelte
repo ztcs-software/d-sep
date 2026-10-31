@@ -588,7 +588,8 @@
         break;
       case "ArrowUp":
       case "ArrowLeft":
-        next = at - 1;
+        // From the menu itself (after a click between its items), up goes to the last item, as down goes to the first.
+        next = Math.max(at, 0) - 1;
         break;
       case "Home":
         next = 0;

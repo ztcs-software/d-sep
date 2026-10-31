@@ -290,8 +290,7 @@ pub fn run(
         let sidecars = sidecars_of(clip, with_sidecars);
         let mut on_bytes = |done| {
             progress.bytes_done = start + done;
-            // The clip's bytes come twice when verifying: copied, then read back.
-            progress.verifying = passes == 2 && (clip.size..2 * clip.size).contains(&done);
+            progress.verifying = passes == 2 && reading_back(done, clip, sidecars);
             report(&progress);
         };
         let placed = place(job, sidecars, options, passes, cancel, &mut summary, &mut journal, &mut on_bytes);
@@ -352,6 +351,18 @@ fn sidecars_of(clip: &Clip, include: bool) -> &[Sidecar] {
 
 fn job_bytes(clip: &Clip, with_sidecars: bool) -> u64 {
     clip.size + sidecars_of(clip, with_sidecars).iter().map(|s| s.size).sum::<u64>()
+}
+
+/// Whether `done` bytes into a verified job are a copy being read back. Each file's bytes come twice, copied, then
+/// read back: the clip's first, then each sidecar's.
+fn reading_back(mut done: u64, clip: &Clip, sidecars: &[Sidecar]) -> bool {
+    for size in std::iter::once(clip.size).chain(sidecars.iter().map(|s| s.size)) {
+        if done < 2 * size {
+            return done >= size;
+        }
+        done -= 2 * size;
+    }
+    false
 }
 
 /// Whether the file's name already starts with `prefix`, ignoring case as Windows does.
@@ -1246,6 +1257,20 @@ mod tests {
         assert_eq!((last.bytes_total, last.bytes_done, seen), (2 * total, 2 * total, 2 * total));
         // Only the Windows copy reports its bytes as they go.
         assert!(!last.verifying && (verifying || !cfg!(windows)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn knows_when_a_sidecar_is_read_back_too() {
+        let root = footage("readback");
+        let clip = scan(&root, false).unwrap().remove(0);
+        // A.MP4, then its 7-byte A.LRF: each copied, then read back.
+        let size = clip.size;
+        let phases: Vec<_> =
+            [0, size - 1, size, 2 * size - 1, 2 * size, 2 * size + 6, 2 * size + 7, 2 * size + 13, 2 * size + 14]
+                .map(|done| reading_back(done, &clip, &clip.sidecars))
+                .into();
+        assert_eq!(phases, [false, false, true, true, false, false, true, true, false]);
         fs::remove_dir_all(root).unwrap();
     }
 

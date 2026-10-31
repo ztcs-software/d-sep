@@ -27,6 +27,13 @@ describe("formatBytes", () => {
     expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
   });
 
+  it("moves up a unit when rounding reaches 1024, and drops the decimal when it reaches 10", () => {
+    expect(formatBytes(1023.6)).toBe("1.0 KB");
+    expect(formatBytes(1024 ** 2 - 1)).toBe("1.0 MB");
+    expect(formatBytes(9.97 * 1024)).toBe("10 KB");
+    expect(formatBytes(9.94 * 1024)).toBe("9.9 KB");
+  });
+
   it("stops at TB", () => {
     expect(formatBytes(2048 * 1024 ** 4)).toBe("2048 TB");
   });
