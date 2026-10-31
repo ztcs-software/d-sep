@@ -210,8 +210,7 @@ impl<'a> Job<'a> {
         // The clip's own folder, as it is under `base`. A clip already inside a destination that's inside the scanned
         // folder is where an earlier sort put it: it keeps its place there, rather than going into another copy of it.
         let parent = clip.path.parent()?;
-        let from = if base.starts_with(root) && parent.starts_with(base) { base } else { root };
-        let sub = parent.strip_prefix(from).ok()?;
+        let sub = under(base, root).and(under(parent, base)).or_else(|| under(parent, root))?;
         let own = if sub.as_os_str().is_empty() { base.to_path_buf() } else { base.join(sub) };
         let dir = match (options.action, options.layout) {
             (Action::Rename, _) => own,
@@ -232,6 +231,19 @@ fn output_dir(dir: &Path, folder: &str) -> PathBuf {
         Some(name) if is_output_dir(name) => dir.with_file_name(folder),
         _ => dir.join(folder),
     }
+}
+
+/// The part of `path` under `dir`, ignoring case as Windows does: "" for `dir` itself, None for a path outside it.
+/// The scanned folder and the destination are picked separately, so they can spell the same folder differently.
+fn under<'a>(path: &'a Path, dir: &Path) -> Option<&'a Path> {
+    let lower = |part: std::path::Component| part.as_os_str().to_string_lossy().to_lowercase();
+    let mut rest = path.components();
+    for part in dir.components() {
+        if lower(rest.next()?) != lower(part) {
+            return None;
+        }
+    }
+    Some(rest.as_path())
 }
 
 pub fn run(
@@ -1298,6 +1310,27 @@ mod tests {
             // Sorting again finds the copies in the destination too, already where they belong: no Out\Out.
             let again = sort_with(&root, &into).summary;
             assert_eq!((again.dlog, again.dlog2, again.dlogm, again.existing), (0, 0, 0, 8), "{name}");
+            assert_eq!(listing(&dest), sorted, "{name}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    /// Windows ignores case in paths, so a destination spelled unlike the scanned folder is still inside it.
+    #[cfg(windows)]
+    #[test]
+    fn finds_a_destination_inside_the_folder_whatever_its_case() {
+        for (name, action, layout) in [("case-names", Action::Rename, Layout::Gather), ("case-each", Action::Folders, Layout::Each)] {
+            let root = footage_with_sub(name);
+            let dest = root.join("Out");
+            fs::create_dir_all(&dest).unwrap();
+            // The scan spells the folder in capitals, the destination as it is.
+            let shouted = PathBuf::from(root.to_string_lossy().to_uppercase());
+            let into = Options { destination: Some(dest.clone()), layout, ..options(Mode::Move, action, true) };
+            sort_with(&shouted, &into);
+            let sorted = listing(&dest);
+            // The clips moved into the destination are found there again, already where they belong: no Out\Out.
+            let again = sort_with(&shouted, &into).summary;
+            assert_eq!((again.dlog, again.dlog2, again.dlogm, again.existing), (0, 0, 0, 4), "{name}");
             assert_eq!(listing(&dest), sorted, "{name}");
             fs::remove_dir_all(root).unwrap();
         }

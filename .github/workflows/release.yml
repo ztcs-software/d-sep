@@ -136,6 +136,12 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # `tauri build` runs cargo without --locked, so a Cargo.lock that no longer matches Cargo.toml would be updated
+      # on the spot, and the release built from dependencies no test has run. CI's `cargo test --locked` would catch
+      # it, but this job doesn't wait for CI, so it fails here instead.
+      - run: cargo fetch --locked
+        working-directory: src-tauri
+
       - run: npm ci
 
       # The portable .exe, built exactly like `npm run exe`. It comes first and from its own --no-bundle build
